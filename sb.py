@@ -98,7 +98,14 @@ for table in selected_tables:
 
 # --- Main Area Tabs for Tables + Query Tabs ---
 query_tab_names = list(st.session_state.query_tabs.keys())
-tabs = st.tabs(selected_tables + query_tab_names)
+# tabs = st.tabs(selected_tables + query_tab_names)
+
+all_tab_names = selected_tables + query_tab_names
+
+if all_tab_names:
+    tabs = st.tabs(all_tab_names)
+else:
+    st.info("Select at least one table or add a query tab to begin.")
 
 # --- Show Selected Tables ---
 for i, table in enumerate(selected_tables):
