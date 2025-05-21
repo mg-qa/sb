@@ -1,43 +1,9 @@
 import streamlit as st
 import sqlite3
 import pandas as pd
-from pathlib import Path
 import os
 
-# Increase file upload limit to 3GB
-
 st.set_page_config(page_title="SQLite Viewer", layout="wide")
-
-# # --- Theme and Text Size Switch ---
-# st.markdown("""
-#     <style>
-#     .dark-mode {
-#         background-color: #121212;
-#         color: white;
-#     }
-#     .light-mode {
-#         background-color: white;
-#         color: black;
-#     }
-#     .large-text {
-#         font-size: 36px;
-#     }
-#     .medium-text {
-#         font-size: 16px;
-#     }
-#     .small-text {
-#         font-size: 14px;
-#     }
-#     </style>
-# """, unsafe_allow_html=True)
-
-# --- Sidebar Settings ---
-# st.sidebar.title("Settings")
-# theme = st.sidebar.selectbox("Choose Theme", ["Light", "Dark"])
-# text_size = st.sidebar.selectbox("Text Size", ["Medium", "Large", "Small"])
-
-# body_class = f"{'dark-mode' if theme == 'Dark' else 'light-mode'} {'large-text' if text_size == 'Large' else 'small-text' if text_size == 'Small' else 'medium-text'}"
-# st.markdown(f"<body class='{body_class}'>", unsafe_allow_html=True)
 
 # --- Session State Initialization ---
 if 'db_files' not in st.session_state:
@@ -46,6 +12,12 @@ if 'active_db' not in st.session_state:
     st.session_state.active_db = None
 if 'query_tabs' not in st.session_state:
     st.session_state.query_tabs = {}
+if 'query_tab_counter' not in st.session_state:
+    st.session_state.query_tab_counter = 1
+if 'filters' not in st.session_state:
+    st.session_state.filters = {}
+if 'clear_flags' not in st.session_state:
+    st.session_state.clear_flags = {}
 
 # --- File Uploader ---
 st.sidebar.header("Upload SQLite Files")
@@ -92,33 +64,69 @@ tables = [row[0] for row in cursor.fetchall()]
 st.sidebar.header("Tables")
 selected_tables = st.sidebar.multiselect("Choose tables to view", tables)
 
-# --- Main Area Tabs for Tables ---
-tabs = st.tabs(selected_tables + ["+ New Query Tab"])
+# --- Add Query Tab Button in Sidebar ---
+if st.sidebar.button("+ Add Query Tab"):
+    new_tab_name = f"Query Tab {st.session_state.query_tab_counter}"
+    st.session_state.query_tabs[new_tab_name] = pd.DataFrame()
+    st.session_state.query_tab_counter += 1
+
+# --- Sidebar Filters ---
+st.sidebar.header("Column Filters")
+for table in selected_tables:
+    df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+
+    # Initialize filters and clear flags
+    if table not in st.session_state.filters:
+        st.session_state.filters[table] = {col: "" for col in df.columns}
+    if table not in st.session_state.clear_flags:
+        st.session_state.clear_flags[table] = False
+
+    with st.sidebar.expander(f"Filters for {table}"):
+        if st.button("Clear Filters", key=f"clear_button_{table}"):
+            st.session_state.clear_flags[table] = True
+
+        # If flagged to clear, reset filters and clear flag
+        if st.session_state.clear_flags[table]:
+            for col in df.columns:
+                st.session_state.filters[table][col] = ""
+            st.session_state.clear_flags[table] = False
+
+        # Input filters
+        for col in df.columns:
+            val = st.text_input(f"{table} → {col}", st.session_state.filters[table][col], key=f"filter_{table}_{col}")
+            st.session_state.filters[table][col] = val
+
+# --- Main Area Tabs for Tables + Query Tabs ---
+query_tab_names = list(st.session_state.query_tabs.keys())
+tabs = st.tabs(selected_tables + query_tab_names)
 
 # --- Show Selected Tables ---
 for i, table in enumerate(selected_tables):
     with tabs[i]:
-        df = pd.read_sql_query(f"SELECT * FROM {table} LIMIT 1000", conn)
+        df = pd.read_sql_query(f"SELECT * FROM {table}", conn)
+
+        # Apply filters
+        filtered_df = df.copy()
+        for col, val in st.session_state.filters[table].items():
+            if val:
+                filtered_df = filtered_df[filtered_df[col].astype(str).str.contains(val, case=False, na=False)]
+
         st.subheader(f"Table: {table}")
-        st.dataframe(df, use_container_width=True)
+        st.dataframe(filtered_df, use_container_width=True)
 
-# --- Query Interface ---
-query_tab_index = len(selected_tables)
-with tabs[query_tab_index]:
-    new_query_name = st.text_input("Query Tab Name", "Query 1")
-    query = st.text_area("SQL Query")
-    if st.button("Execute Query"):
-        try:
-            result = pd.read_sql_query(query, conn)
-            st.session_state.query_tabs[new_query_name] = result
-        except Exception as e:
-            st.error(f"Query failed: {e}")
+# --- Query Interface Tabs ---
+for i, query_tab in enumerate(query_tab_names):
+    with tabs[len(selected_tables) + i]:
+        st.subheader(query_tab)
+        query = st.text_area(f"SQL Query ({query_tab})", key=f"query_input_{query_tab}")
+        if st.button(f"Execute ({query_tab})"):
+            try:
+                result = pd.read_sql_query(query, conn)
+                st.session_state.query_tabs[query_tab] = result
+            except Exception as e:
+                st.error(f"Query failed: {e}")
 
-# --- Display Executed Query Tabs ---
-if st.session_state.query_tabs:
-    st.header("Query Results")
-    for name, result_df in st.session_state.query_tabs.items():
-        with st.expander(name):
-            st.dataframe(result_df, use_container_width=True)
+        if not st.session_state.query_tabs[query_tab].empty:
+            st.dataframe(st.session_state.query_tabs[query_tab], use_container_width=True)
 
 conn.close()
